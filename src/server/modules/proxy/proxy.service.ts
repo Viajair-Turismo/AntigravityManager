@@ -85,28 +85,38 @@ export class ProxyService {
 
       try {
         const projectId = token.token.project_id ?? "";
+        const isGmailAccount = token.token.email.toLowerCase().endsWith(
+          "@gmail.com",
+        );
+
+        if (!projectId || isGmailAccount) {
+          this.logger.debug(
+            `Account ${token.token.email} is Gmail or missing project, using PROACTIVE public API fallback for Anthropic request.`,
+          );
+          const publicModel = targetModel.replace(/^models\//i, "");
+          if (request.stream) {
+            const stream = await this.geminiClient.streamGenerate(
+              publicModel,
+              this.convertClaudeToGemini(this.toClaudeRequest(request)),
+              token.token.access_token,
+              token.token.upstream_proxy_url,
+            );
+            return this.processAnthropicInternalStream(stream, targetModel);
+          } else {
+            const response = await this.geminiClient.generate(
+              publicModel,
+              this.convertClaudeToGemini(this.toClaudeRequest(request)),
+              token.token.access_token,
+              token.token.upstream_proxy_url,
+            );
+            return this.toAnthropicChatResponse(transformResponse(response));
+          }
+        }
+
         const geminiBody = transformClaudeRequestIn(
           this.toClaudeRequest(request),
           projectId,
         );
-
-        if (request.stream) {
-          const stream = await this.geminiClient.streamGenerateInternal(
-            geminiBody,
-            token.token.access_token,
-            token.token.upstream_proxy_url,
-            extraHeaders,
-          );
-          return this.processAnthropicInternalStream(stream, geminiBody.model);
-        } else {
-          const response = await this.generateInternalWithStreamFallback(
-            geminiBody,
-            token.token.access_token,
-            token.token.upstream_proxy_url,
-            extraHeaders,
-          );
-          return this.toAnthropicChatResponse(transformResponse(response));
-        }
       } catch (error) {
         if (
           error instanceof Error && this.isProjectContextError(error.message)
@@ -658,6 +668,38 @@ export class ProxyService {
       try {
         const claudeRequest = this.convertOpenAIToClaude(request);
         const projectId = token.token.project_id ?? "";
+        const isGmailAccount = token.token.email?.toLowerCase().endsWith(
+          "@gmail.com",
+        );
+
+        if (!projectId || isGmailAccount) {
+          this.logger.debug(
+            `Account ${token.token.email} is Gmail or missing project, using PROACTIVE public API fallback for OpenAI request.`,
+          );
+          const publicModel = targetModel.replace(/^models\//i, "");
+          if (request.stream) {
+            const stream = await this.geminiClient.streamGenerate(
+              publicModel,
+              this.convertOpenAIToGemini(request),
+              token.token.access_token,
+              token.token.upstream_proxy_url,
+            );
+            return this.passthroughSseStream(stream);
+          } else {
+            const response = await this.geminiClient.generate(
+              publicModel,
+              this.convertOpenAIToGemini(request),
+              token.token.access_token,
+              token.token.upstream_proxy_url,
+            );
+            const claudeResponse = transformResponse(response);
+            return this.convertClaudeToOpenAIResponse(
+              claudeResponse,
+              request.model,
+            );
+          }
+        }
+
         const geminiBody = transformClaudeRequestIn(claudeRequest, projectId);
 
         // Use v1internal API (same as Anthropic handler)
