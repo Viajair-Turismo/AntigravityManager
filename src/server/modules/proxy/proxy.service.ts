@@ -115,9 +115,10 @@ export class ProxyService {
             `Anthropic request hit project context issue, retrying with public API: ${error.message}`,
           );
           try {
+            const publicModel = targetModel.replace(/^models\//i, "");
             if (request.stream) {
               const stream = await this.geminiClient.streamGenerate(
-                targetModel,
+                publicModel,
                 this.convertClaudeToGemini(this.toClaudeRequest(request)),
                 token.token.access_token,
                 token.token.upstream_proxy_url,
@@ -125,7 +126,7 @@ export class ProxyService {
               return this.processAnthropicInternalStream(stream, targetModel);
             } else {
               const response = await this.geminiClient.generate(
-                targetModel,
+                publicModel,
                 this.convertClaudeToGemini(this.toClaudeRequest(request)),
                 token.token.access_token,
                 token.token.upstream_proxy_url,
@@ -326,26 +327,22 @@ export class ProxyService {
 
       try {
         const currentProjectId = token.token.project_id ?? "";
+        const isGmailAccount = token.token.email.toLowerCase().endsWith(
+          "@gmail.com",
+        );
 
-        if (!currentProjectId) {
-          // No project? Jump straight to public API
-          if (request.stream) {
-            const stream = await this.geminiClient.streamGenerate(
-              targetModel,
-              request,
-              token.token.access_token,
-              token.token.upstream_proxy_url,
-            );
-            return this.passthroughSseStream(stream);
-          } else {
-            const response = await this.geminiClient.generate(
-              targetModel,
-              request,
-              token.token.access_token,
-              token.token.upstream_proxy_url,
-            );
-            return this.normalizeGeminiGenerateResponse(response);
-          }
+        if (!currentProjectId || isGmailAccount) {
+          this.logger.debug(
+            `Account ${token.token.email} is Gmail or missing project, using public API.`,
+          );
+          // Gmail or no project? Jump straight to public API (Unary)
+          const response = await this.geminiClient.generate(
+            targetModel.replace(/^models\//i, ""),
+            request,
+            token.token.access_token,
+            token.token.upstream_proxy_url,
+          );
+          return this.normalizeGeminiGenerateResponse(response);
         }
 
         const internalBody = this.createGeminiInternalRequest(
@@ -439,10 +436,29 @@ export class ProxyService {
       attemptedAccountIds.add(token.id);
 
       try {
+        const currentProjectId = token.token.project_id ?? "";
+        const isGmailAccount = token.token.email.toLowerCase().endsWith(
+          "@gmail.com",
+        );
+
+        if (!currentProjectId || isGmailAccount) {
+          this.logger.debug(
+            `Account ${token.token.email} is Gmail or missing project, using public API.`,
+          );
+          // Gmail or no project? Jump straight to public API (Streaming)
+          const stream = await this.geminiClient.streamGenerate(
+            targetModel.replace(/^models\//i, ""),
+            request,
+            token.token.access_token,
+            token.token.upstream_proxy_url,
+          );
+          return this.passthroughSseStream(stream);
+        }
+
         const internalBody = this.createGeminiInternalRequest(
           targetModel,
           request,
-          token.token.project_id ?? "",
+          currentProjectId,
           "generate-content",
         );
 
